@@ -1,5 +1,9 @@
 # Rebes! 👍
 
+<p align="center">
+  <img src="docs/poster.png" alt="CleanMyMac + Macs Fan Control + AlDente → Rebes!" width="560">
+</p>
+
 **Your Mac, sorted.** An all-in-one, open-source macOS utility: junk cleaner,
 AlDente-style battery charge control, fan control, and live system monitoring —
 one liquid-glass app plus a menu bar companion. One app instead of three:
