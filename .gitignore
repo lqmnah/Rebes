@@ -1,0 +1,6 @@
+.build/
+dist/
+*.o
+.DS_Store
+*.xcodeproj
+TASK.md

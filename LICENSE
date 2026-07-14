@@ -1,0 +1,33 @@
+Rebes! License (Fair Source — Attribution, No Resale)
+
+Copyright (c) 2026 Rebes! (github.com/lqmnah/Rebes)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, merge, publish and distribute the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following
+conditions:
+
+1. ATTRIBUTION — All copies, substantial portions, and derivative works of
+   the Software must retain this license notice and give visible credit to
+   "Rebes!" (for example in the about screen, README, or documentation).
+
+2. NO RESALE — The Software, and derivative works of it, may NOT be sold,
+   licensed for a fee, offered behind a paywall, or otherwise redistributed
+   for direct monetary compensation. Free redistribution (with attribution)
+   is allowed and encouraged. Using the Software privately inside a
+   commercial organization is allowed; charging money FOR the Software or a
+   derivative of it is not.
+
+3. THIRD-PARTY CODE — Portions of the Software adapted from third-party
+   projects (see docs/THIRD-PARTY.md) remain under their original licenses,
+   which continue to apply to those portions.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE. THE SOFTWARE CONTROLS FANS AND BATTERY CHARGING HARDWARE — YOU USE
+IT AT YOUR OWN RISK.
