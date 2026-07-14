@@ -21,6 +21,7 @@ enum UIShots {
     static func runIfRequested() {
         panelProbeIfRequested()
         clickProbeIfRequested()
+        batteryProbeIfRequested()
         guard let i = CommandLine.arguments.firstIndex(of: "--ui-shots"),
               CommandLine.arguments.count > i + 1 else { return }
         let dir = CommandLine.arguments[i + 1]
@@ -39,6 +40,7 @@ enum UIShots {
         shoot(AnyView(ContentView().environmentObject(boot)),
               size: NSSize(width: 1100, height: 760), name: "main-dashboard", dir: dir)
         shoot(AnyView(KipasTemperatureView()), size: NSSize(width: 940, height: 780), name: "fans", dir: dir)
+        shoot(AnyView(FanPreviewHost()), size: NSSize(width: 560, height: 320), name: "fan-manual", dir: dir)
         shoot(AnyView(BateraiView()), size: NSSize(width: 940, height: 1400), name: "battery", dir: dir)
         shoot(AnyView(SettingsView()), size: NSSize(width: 940, height: 1000), name: "settings", dir: dir)
 
@@ -152,6 +154,63 @@ enum UIShots {
                 let marker = got == name ? "  <== matches" : ""
                 report += "  dy=\(Int(dy)): clicked appkit \(p) → \(got)\(marker)\n"
             }
+        }
+    }
+
+    /// `--battery-probe <dir>`: render the ACTUAL status-bar label (icon+value
+    /// through MenuBarRenderer) for battery at several levels & charging states
+    /// onto a gray card, so we see exactly what the menu bar shows.
+    private static func batteryProbeIfRequested() {
+        guard let i = CommandLine.arguments.firstIndex(of: "--battery-probe"),
+              CommandLine.arguments.count > i + 1 else { return }
+        let dir = CommandLine.arguments[i + 1]
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        let cases: [(Int, Bool)] = [(100, false), (75, false), (50, false), (12, false), (5, false),
+                                    (100, true), (75, true), (50, true), (12, true)]
+        for (pct, charging) in cases {
+            let label = MenuBarRenderer.render(
+                metrics: [.battery], showIcon: false,
+                battery: (pct, charging),
+                icon: { $0.symbol },
+                value: { _ in "\(pct)%" })
+            // White-tint the template the way a dark menu bar does, then place
+            // it on a dark card at 4x.
+            let scale: CGFloat = 4
+            let tinted = NSImage(size: label.size)
+            tinted.lockFocus()
+            NSColor.white.set()
+            NSRect(origin: .zero, size: label.size).fill()
+            label.draw(in: NSRect(origin: .zero, size: label.size), from: .zero,
+                       operation: .destinationIn, fraction: 1)
+            tinted.unlockFocus()
+            let card = NSImage(size: NSSize(width: label.size.width * scale + 24,
+                                            height: label.size.height * scale + 16))
+            card.lockFocus()
+            NSColor(white: 0.12, alpha: 1).setFill()
+            NSRect(origin: .zero, size: card.size).fill()
+            NSGraphicsContext.current?.imageInterpolation = .none
+            tinted.draw(in: NSRect(x: 12, y: 8, width: label.size.width * scale,
+                                   height: label.size.height * scale))
+            card.unlockFocus()
+            if let tiff = card.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: dir + "/bat-\(pct)\(charging ? "c" : "").png"))
+            }
+        }
+        exit(0)
+    }
+
+    /// Renders one FanControlView in manual mode with mock data so the slider
+    /// UI is visible in a headless shot (a real fan needs the daemon).
+    private struct FanPreviewHost: View {
+        var body: some View {
+            let fan = FanInfo(id: 0, currentRPM: 2100, minRPM: 1200,
+                              maxRPM: 4700, targetRPM: 2600, mode: 1)
+            FanControlView(fan: .constant(fan), onNeedRefresh: {})
+                .padding(20)
+                .frame(width: 520)
+                .background(Color(white: 0.09))
         }
     }
 

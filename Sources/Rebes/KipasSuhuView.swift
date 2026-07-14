@@ -210,20 +210,35 @@ struct FanControlView: View {
                 .disabled(state.isApplying)
 
                 if (state.isManualStaged || fan.mode == 1) && fan.maxRPM > fan.minRPM {
-                    HStack {
-                        Slider(value: $state.sliderValue, in: fan.minRPM...fan.maxRPM, step: 10)
-                        // Tracks the drag directly — animating it would fight
-                        // the user's finger.
-                        Text("\(Int(state.sliderValue))")
-                            .monospacedDigit()
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .frame(width: 46, alignment: .trailing)
-                        Button("Apply") {
-                            runHelper(.fanSet(fan.id, Float(state.sliderValue)))
+                    VStack(alignment: .leading, spacing: 8) {
+                        // Plain continuous slider — no `step:` (that draws tick
+                        // marks under the track). Snap to 10 rpm on apply.
+                        Slider(value: $state.sliderValue, in: fan.minRPM...fan.maxRPM)
+                            .tint(Theme.accentFans)
+                            .controlSize(.small)
+                        HStack {
+                            Text("\(Int(fan.minRPM))")
+                                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                            Spacer()
+                            Text("\(Int(state.sliderValue.rounded())) rpm")
+                                .monospacedDigit()
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(Theme.accentFans)
+                            Spacer()
+                            Text("\(Int(fan.maxRPM))")
+                                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        }
+                        .monospacedDigit()
+                        Button {
+                            let rpm = (state.sliderValue / 10).rounded() * 10
+                            runHelper(.fanSet(fan.id, Float(rpm)))
+                        } label: {
+                            Text("Apply").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(AccentButtonStyle(accent: Theme.accentFans))
                         .disabled(state.isApplying)
                     }
+                    .padding(.top, 2)
                 }
 
                 if state.isApplying {

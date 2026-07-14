@@ -118,19 +118,48 @@ enum MenuBarRenderer {
         return image
     }
 
-    /// The system's OWN battery glyph: SF Symbols' battery.100percent with
-    /// `variableValue` renders the native proportional fill (and the .bolt
-    /// variant adds the charging bolt) — identical to the macOS status item
-    /// because it IS the macOS artwork. Falls back to the plain symbol if the
-    /// variable-value initializer is unavailable.
+    /// Native-style battery glyph whose fill follows the charge level, using
+    /// the DISCRETE SF battery symbols (battery.0/25/50/75/100percent).
+    ///
+    /// Why discrete, not variableValue: `battery.100percent` + `variableValue`
+    /// does NOT render a proportional fill once the symbol is baked into a
+    /// bitmap for the status bar — it always draws FULL (verified), so the
+    /// icon never reflected the real level. The discrete symbols are the same
+    /// artwork macOS itself shows and always render the correct fill.
+    ///
+    /// Charging: a small `bolt.fill` is placed just LEFT of the battery
+    /// ("⚡▯") — always cleanly readable at menu-bar size (only
+    /// `battery.100percent.bolt` ships as a bolt variant, and knocking the
+    /// bolt out of the fill reads as a jagged notch, not a lightning bolt).
     static func batteryGlyph(percent: Int, charging: Bool) -> NSImage? {
-        let name = charging ? "battery.100percent.bolt" : "battery.100percent"
-        let value = Double(max(0, min(percent, 100))) / 100.0
+        let level: String
+        switch max(0, min(percent, 100)) {
+        case ..<13: level = "battery.0percent"
+        case ..<38: level = "battery.25percent"
+        case ..<63: level = "battery.50percent"
+        case ..<88: level = "battery.75percent"
+        default:    level = "battery.100percent"
+        }
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        let img = NSImage(systemSymbolName: name, variableValue: value,
-                          accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: name, accessibilityDescription: nil)
-        return img?.withSymbolConfiguration(config)
+        guard let base = NSImage(systemSymbolName: level, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return nil }
+        base.isTemplate = true
+        guard charging,
+              let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)) else {
+            return base
+        }
+        let gap: CGFloat = 2
+        let out = NSImage(size: NSSize(width: bolt.size.width + gap + base.size.width,
+                                       height: base.size.height))
+        out.lockFocus()
+        bolt.draw(in: NSRect(x: 0, y: (base.size.height - bolt.size.height) / 2,
+                             width: bolt.size.width, height: bolt.size.height))
+        base.draw(in: NSRect(x: bolt.size.width + gap, y: 0,
+                             width: base.size.width, height: base.size.height))
+        out.unlockFocus()
+        out.isTemplate = true
+        return out
     }
 }
 
