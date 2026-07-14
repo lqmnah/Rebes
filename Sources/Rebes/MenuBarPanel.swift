@@ -135,7 +135,6 @@ enum MenuBarRenderer {
 }
 
 class MenuBarPanelState: ObservableObject {
-    @Published var confirmEmptyTrash = false
     // NEVER initialize this by running a subprocess: @StateObject init happens
     // during a SwiftUI layout pass, and Process.waitUntilExit re-enters the
     // run loop → AttributeGraph re-entrancy → SIGABRT. Loaded async in onAppear.
@@ -298,9 +297,15 @@ struct MenuBarPanel: View {
                 }
                 StackCard {
                     actionRow("trash", Theme.accentFiles, "Empty Trash…") {
-                        state.confirmEmptyTrash = true
+                        // Confirm via a NATIVE NSAlert, not a SwiftUI
+                        // confirmationDialog: a modal presented inside the
+                        // borderless non-activating panel can't take key, and
+                        // the panel's click-dismiss monitors swallow the
+                        // dialog's button clicks — the whole thing froze.
+                        MenuBarActions.confirmAndEmptyTrash()
                     }
                     actionRow("lock.fill", Theme.accentMaintenance, "Lock Screen") {
+                        StatusBarController.shared.hidePanel()
                         MenuBarActions.lockScreen()
                     }
                 }
@@ -326,15 +331,6 @@ struct MenuBarPanel: View {
                                    startPoint: .top, endPoint: .bottom),
                     lineWidth: 1)
         )
-        .confirmationDialog(
-            "Empty Trash? All Trash contents are deleted PERMANENTLY and cannot be undone.",
-            isPresented: $state.confirmEmptyTrash
-        ) {
-            Button("Empty Permanently", role: .destructive) {
-                MenuBarActions.emptyTrash { _ in }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         .onAppear {
             monitor.start()
             state.reloadSections()
@@ -472,31 +468,34 @@ struct MenuBarPanel: View {
         @ViewBuilder accessory: () -> Accessory,
         _ action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 5) {
-                    Image(systemName: icon).font(.system(size: 10)).foregroundStyle(accent)
-                    Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-                    Spacer()
-                    accessory()
-                }
-                Group {
-                    if let raw {
-                        AnimatedNumber(text: value, value: raw)
-                    } else {
-                        Text(value).monospacedDigit()
-                    }
-                }
-                .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(.primary)
-                Text(detail).monospacedDigit().font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                ProgressView(value: max(0, min(progress, 1))).tint(accent).controlSize(.mini)
+        // The card navigates via an onTapGesture (NOT a Button) so a nested
+        // accessory Button — e.g. the Memory card's Speed Up bolt — reliably
+        // consumes its own tap without also firing the card's navigation
+        // (nested SwiftUI Buttons have version-dependent hit-test quirks).
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(accent)
+                Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+                accessory()
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+            Group {
+                if let raw {
+                    AnimatedNumber(text: value, value: raw)
+                } else {
+                    Text(value).monospacedDigit()
+                }
+            }
+            .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(.primary)
+            Text(detail).monospacedDigit().font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            ProgressView(value: max(0, min(progress, 1))).tint(accent).controlSize(.mini)
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture { action() }
         .hoverLift(accent: accent, cornerRadius: 12, scale: 1.01)
     }
 
@@ -585,18 +584,42 @@ enum MenuBarActions {
     }
 
     static func lockScreen() {
-        // login.framework's SACLockScreenImmediate locks without needing
-        // Accessibility (synthetic ⌃⌘Q would be silently dropped without it).
-        typealias LockFn = @convention(c) () -> Int32
-        if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_NOW),
-           let sym = dlsym(handle, "SACLockScreenImmediate") {
-            let lock = unsafeBitCast(sym, to: LockFn.self)
-            _ = lock()
-            dlclose(handle)
-            return
+        // Off the main thread: the pmset fallback spawns a subprocess, and
+        // nothing here needs to touch the UI.
+        DispatchQueue.global(qos: .userInitiated).async {
+            // login.framework's SACLockScreenImmediate locks without needing
+            // Accessibility (synthetic ⌃⌘Q would be silently dropped without it).
+            typealias LockFn = @convention(c) () -> Int32
+            if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_NOW),
+               let sym = dlsym(handle, "SACLockScreenImmediate") {
+                let lock = unsafeBitCast(sym, to: LockFn.self)
+                _ = lock()
+                dlclose(handle)
+                return
+            }
+            // Fallback: pmset (locks if "require password immediately" is set).
+            _ = run("/usr/bin/pmset", ["displaysleepnow"])
         }
-        // Fallback: pmset (locks if "require password immediately" is set).
-        _ = run("/usr/bin/pmset", ["displaysleepnow"])
+    }
+
+    /// Hide the panel, activate the app, then confirm with a native NSAlert
+    /// (app-modal — works regardless of the panel's key state) before emptying.
+    @MainActor
+    static func confirmAndEmptyTrash() {
+        StatusBarController.shared.hidePanel()
+        NSApp.activate(ignoringOtherApps: true)
+        // Next runloop tick so the panel is fully gone before the modal.
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Empty Trash?"
+            alert.informativeText = "All Trash contents are deleted permanently and cannot be undone."
+            alert.addButton(withTitle: "Empty Permanently")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                emptyTrash { _ in }
+            }
+        }
     }
 
     static func emptyTrash(completion: @escaping @Sendable (Bool) -> Void) {
@@ -614,7 +637,9 @@ enum MenuBarActions {
         p.arguments = args
         let out = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        // Discard stderr rather than piping it: an unread stderr pipe that
+        // fills its 64KB buffer would deadlock the child (and this reader).
+        p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return "" }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
