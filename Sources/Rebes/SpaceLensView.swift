@@ -29,10 +29,17 @@ class SpaceLensState: ObservableObject {
 
     enum Mode { case lens, duplicates }
     var current: URL? { stack.last }
-    private var cancelFlag = false
-    func requestCancel() { cancelFlag = true }
-    func resetCancel() { cancelFlag = false }
-    var cancelled: Bool { cancelFlag }
+
+    /// Generation token serializing lens scans: a slow scan of a big folder
+    /// must never overwrite the results of a newer scan of a smaller one.
+    var lensGeneration = 0
+
+    // Thread-safe cancel flag (written on main, read on the hashing thread).
+    private let cancelLock = NSLock()
+    private var _cancelled = false
+    func requestCancel() { cancelLock.lock(); _cancelled = true; cancelLock.unlock() }
+    func resetCancel() { cancelLock.lock(); _cancelled = false; cancelLock.unlock() }
+    var cancelled: Bool { cancelLock.lock(); defer { cancelLock.unlock() }; return _cancelled }
 }
 
 struct SpaceLensView: View {
@@ -205,11 +212,15 @@ struct SpaceLensView: View {
     }
 
     private func scanLens(_ url: URL) {
+        state.lensGeneration += 1
+        let generation = state.lensGeneration
         state.isScanning = true
         state.errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
             let entries = DiskScanner.spaceLens(at: url)
             DispatchQueue.main.async {
+                // A newer scan started while this one ran — drop stale results.
+                guard generation == state.lensGeneration else { return }
                 state.entries = entries
                 state.isScanning = false
             }

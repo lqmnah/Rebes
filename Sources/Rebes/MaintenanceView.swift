@@ -58,14 +58,15 @@ struct MaintenanceView: View {
                     actionCard(
                         icon: "trash", title: "Empty Trash",
                         buttonTitle: "Empty…", accent: Theme.accentUninstall, actionKey: "trash",
-                        action: { state.confirmEmptyTrash = true }
+                        // Re-scan before the confirm dialog so the size quoted
+                        // is never a stale snapshot.
+                        action: { refreshTrashSize(); state.confirmEmptyTrash = true }
                     ) {
-                        // Live size rolls as the Trash fills/empties.
                         HStack(spacing: 3) {
                             Text("PERMANENT —")
                             AnimatedNumber(text: state.trashSize.formattedSize, value: Double(state.trashSize))
                                 .fontWeight(.semibold)
-                            Text("in Trash right now. Cannot be undone.")
+                            Text("in Trash. Cannot be undone.")
                         }
                     }
                 }
@@ -275,6 +276,23 @@ struct StartupItemsInline: View {
         do {
             try FileManager.default.moveItem(at: oldUrl, to: newUrl)
             SafeCleaner.shared.logAction("Renamed \(oldUrl.path) to \(newUrl.path)")
+            // Renaming alone doesn't unload/load a running launchd job — the
+            // switch would lie until next login. Best-effort bootout/bootstrap
+            // so it takes effect NOW. (Failure is non-fatal: the rename still
+            // applies at next login.)
+            let label = newUrl.deletingPathExtension().lastPathComponent
+            let uid = getuid()
+            DispatchQueue.global(qos: .utility).async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                p.arguments = enable
+                    ? ["bootstrap", "gui/\(uid)", newUrl.path]
+                    : ["bootout", "gui/\(uid)/\(label)"]
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                try? p.run()
+                p.waitUntilExit()
+            }
             state.errorMessage = nil
             loadItems()
         } catch {

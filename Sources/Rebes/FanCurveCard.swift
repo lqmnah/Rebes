@@ -90,7 +90,12 @@ struct FanCurveCard: View {
             DispatchQueue.main.async {
                 s.busy = false
                 s.status = result.message
-                if !result.ok { s.enabled = false }
+                if !result.ok {
+                    s.enabled = false
+                    // Roll back persistence too — otherwise the next launch
+                    // re-arms the curve the user was just told failed to apply.
+                    AppSettings.shared.fanCurveEnabled = false
+                }
             }
         }
     }

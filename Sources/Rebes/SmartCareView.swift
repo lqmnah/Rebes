@@ -29,7 +29,6 @@ class SmartCareState: ObservableObject {
 
 struct SmartCareView: View {
     @StateObject private var state = SmartCareState()
-    @ObservedObject private var monitor = SystemMonitor.shared
 
     var body: some View {
         ScrollView {
@@ -108,8 +107,6 @@ struct SmartCareView: View {
         }
         .background(Theme.bg)
         .beresStamp(isPresented: $state.showBeres, detail: state.beresDetail)
-        .onAppear { monitor.start() }
-        .onDisappear { monitor.stop() }
         .confirmationDialog("Move \(state.reclaimable.formattedSize) of junk to Trash?", isPresented: $state.confirm) {
             Button("Care Now", role: .destructive) { clean() }
             Button("Cancel", role: .cancel) {}

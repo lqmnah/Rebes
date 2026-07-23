@@ -12,7 +12,6 @@ import RebesCore
 
 class SettingsState: ObservableObject {
     @Published var daemonInstalled = HelperClient.shared.isDaemonInstalled()
-    @Published var daemonAlive = false
     @Published var busy = false
     @Published var message: String?
 
@@ -205,23 +204,6 @@ struct SettingsView: View {
 
     private func refresh() {
         state.daemonInstalled = HelperClient.shared.isDaemonInstalled()
-        HelperClient.shared.pingDaemon { alive in
-            DispatchQueue.main.async { state.daemonAlive = alive }
-        }
-    }
-
-    private func install() {
-        state.busy = true
-        state.message = nil
-        let helper = helperBinaryPath
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = HelperClient.shared.installDaemon(helperBinary: helper)
-            DispatchQueue.main.async {
-                state.busy = false
-                state.message = result.ok ? "Full access enabled ✓" : "Failed: \(result.output)"
-                refresh()
-            }
-        }
     }
 
     private func uninstall() {

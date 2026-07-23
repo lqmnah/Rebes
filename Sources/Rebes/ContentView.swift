@@ -232,6 +232,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .rebesNavigate)) { note in
             if let item = note.object as? SidebarItem { appState.selection = item }
         }
+        .onAppear {
+            // Consume a navigation target queued while the window was closed
+            // (menu bar panel → reopen). Arrives reliably regardless of how
+            // long WindowGroup creation took.
+            if let item = MenuBarActions.pendingNavigate {
+                MenuBarActions.pendingNavigate = nil
+                appState.selection = item
+            }
+        }
         .sheet(isPresented: $boot.showFullAccessOnboarding) {
             FullAccessOnboardingView()
                 .environmentObject(boot)

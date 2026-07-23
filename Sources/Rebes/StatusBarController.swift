@@ -29,6 +29,9 @@ final class StatusBarController: NSObject {
     private var labelTimer: Timer?
     private var globalClickMonitor: Any?
     private var localMonitor: Any?
+    private var settingsObserver: NSObjectProtocol?
+    /// Last rendered label inputs — skip the bitmap re-render when unchanged.
+    private var lastLabelKey = ""
 
     private override init() { super.init() }
 
@@ -46,7 +49,7 @@ final class StatusBarController: NSObject {
         labelTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in StatusBarController.shared.updateLabel() }
         }
-        NotificationCenter.default.addObserver(
+        settingsObserver = NotificationCenter.default.addObserver(
             forName: .rebesMenuBarSettingsChanged, object: nil, queue: .main
         ) { _ in
             Task { @MainActor in StatusBarController.shared.updateLabel() }
@@ -66,10 +69,19 @@ final class StatusBarController: NSObject {
             case .none: return ""
             }
         }
+        let metrics = AppSettings.shared.menuBarMetrics
+        let showIcon = AppSettings.shared.menuBarShowIcon
+        let battery = monitor.battery.map { ($0.currentChargePercent, $0.isCharging) }
+        // Re-rendering the NSImage bitmap every 2s is pure allocation churn
+        // when nothing changed — skip it.
+        let key = metrics.map { value(for: $0) }.joined(separator: "|")
+            + "|\(showIcon)|\(battery?.0 ?? -1)|\(battery?.1 ?? false)"
+        guard key != lastLabelKey else { return }
+        lastLabelKey = key
         statusItem?.button?.image = MenuBarRenderer.render(
-            metrics: AppSettings.shared.menuBarMetrics,
-            showIcon: AppSettings.shared.menuBarShowIcon,
-            battery: monitor.battery.map { ($0.currentChargePercent, $0.isCharging) },
+            metrics: metrics,
+            showIcon: showIcon,
+            battery: battery,
             icon: { $0.symbol }, value: value(for:)
         )
     }

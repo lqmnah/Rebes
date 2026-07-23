@@ -113,14 +113,20 @@ struct ChargeControlSection: View {
                 state.config = AppSettings.shared.chargeConfig
             }
             refresh()
-            state.pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-                Task { @MainActor in refresh() }
+            // Guard against double onAppear stacking a second 5s XPC poller.
+            if state.pollTimer == nil {
+                state.pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+                    Task { @MainActor in refresh() }
+                }
             }
         }
         .onDisappear {
             monitor.stop()
             state.pollTimer?.invalidate()
             state.pollTimer = nil
+            // The sleep assertion is NOT released here: SystemMonitor's
+            // permanent tick owns it, so "stay awake until limit" keeps
+            // working (and is still released correctly) after a tab switch.
         }
     }
 

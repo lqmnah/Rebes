@@ -88,7 +88,36 @@ struct KipasTemperatureView: View {
         }
         .background(Theme.bg)
         .onAppear(perform: refresh)
-        .onReceive(timer) { _ in refresh() }
+        // Fans come from SystemMonitor's permanent 2.5s sampler — one SMC
+        // reader machine-wide, so this view, the dashboard and the menu bar
+        // never disagree. The local timer only polls the extra temp keys.
+        .onReceive(SystemMonitor.shared.$fans) { readings in
+            state.hasFans = !readings.isEmpty
+            state.fans = readings.map {
+                FanInfo(id: $0.id, currentRPM: $0.actual, minRPM: $0.min,
+                        maxRPM: $0.max, targetRPM: $0.target, mode: $0.mode)
+            }
+            state.isLoading = false
+        }
+        .onReceive(timer) { _ in refreshTemps() }
+    }
+
+    /// Temps-only poll for the 3s local timer (fans are SystemMonitor-sourced).
+    func refreshTemps() {
+        DispatchQueue.global(qos: .utility).async {
+            let smc = SMC.shared
+            let candidateTemps = [
+                "Tp01", "Tp02", "Tp05", "Tp09", "Te05", "Te06",
+                "Tg05", "Tg0D", "TB0T", "TB1T", "Ts00", "Ts01", "TC10"
+            ]
+            var newTemps: [(String, Double)] = []
+            for key in candidateTemps {
+                if let value = smc.getValue(key), value > 0, value < 130 {
+                    newTemps.append((key, value))
+                }
+            }
+            DispatchQueue.main.async { state.temps = newTemps }
+        }
     }
 
     func refresh() {

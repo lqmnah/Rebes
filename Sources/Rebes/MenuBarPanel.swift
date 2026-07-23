@@ -432,7 +432,10 @@ struct MenuBarPanel: View {
             // scene graph (@Environment openWindow is a no-op here), so ask
             // the App scene to recreate the window the same way a Dock-icon
             // click does — a reopen Apple event to ourselves — and navigate
-            // once the fresh ContentView is up.
+            // once the fresh ContentView is up. The destination travels via
+            // pendingNavigate (consumed on ContentView.onAppear); the delayed
+            // post is belt-and-suspenders for an already-alive view.
+            MenuBarActions.pendingNavigate = item
             MenuBarActions.sendReopenEvent()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 NotificationCenter.default.post(name: .rebesNavigate, object: item)
@@ -584,6 +587,13 @@ private struct QuitRow: View {
 }
 
 enum MenuBarActions {
+    /// Sidebar destination pending delivery to a not-yet-created ContentView.
+    /// Set before sendReopenEvent(); consumed by ContentView.onAppear. Fixes
+    /// the race where a fixed 350ms delayed notification fired into the void
+    /// on a cold start and the user landed on Dashboard instead of the pane
+    /// they clicked.
+    @MainActor static var pendingNavigate: SidebarItem?
+
     /// Ask our own App scene to recreate the main WindowGroup window — the
     /// same reopen Apple event a Dock-icon click delivers. Needed because the
     /// menu bar panel lives outside the SwiftUI scene graph.

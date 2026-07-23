@@ -83,8 +83,10 @@ final class SystemMonitor: ObservableObject {
         return ("Needs Care", Theme.accentUninstall, score)
     }
 
-    /// Views call start/stop in onAppear/onDisappear; sampling only runs
-    /// while at least one consumer is visible.
+    /// The menu bar controller subscribes once at launch and never stops, so
+    /// sampling effectively runs for the process lifetime (the menu-bar label
+    /// needs it). View-level start/stop ref-counting is harmless bookkeeping —
+    /// it never actually pauses the timer.
     func start() {
         subscribers += 1
         guard timer == nil else { return }
@@ -150,6 +152,16 @@ final class SystemMonitor: ObservableObject {
                     if b.temperatureC > 0 { monitor.push(&monitor.batteryTempHistory, b.temperatureC, at: now) }
                     monitor.push(&monitor.powerHistory, b.watts, at: now)
                 }
+
+                // "Stay awake until the charge limit" is a FEATURE, not a view
+                // concern — evaluate it from this permanent sampler so the
+                // sleep assertion is held/released correctly even after the
+                // user leaves the Battery tab (previously it leaked forever).
+                let cfg = AppSettings.shared.chargeConfig
+                let holdAwake = cfg.enabled && cfg.disableSleepUntilLimit
+                    && (battery?.isPluggedIn ?? false)
+                    && (battery?.currentChargePercent ?? 100) < cfg.limitPercent
+                ChargeSleepGuard.shared.update(shouldHold: holdAwake)
             }
         }
     }
@@ -173,7 +185,7 @@ final class CaffeinateManager: ObservableObject {
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "Rebes! — Tetap Terjaga" as CFString,
+            "Rebes! — Staying Awake" as CFString,
             &id
         )
         if result == kIOReturnSuccess {

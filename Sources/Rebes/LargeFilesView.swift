@@ -23,6 +23,9 @@ class LargeFilesState: ObservableObject {
     @Published var isScanning = false
     @Published var scannedFolder: URL?
     @Published var thresholdMB: Double = 100
+    /// Threshold the LAST scan actually used — moving the slider afterwards
+    /// must not rewrite the empty-state's claim about the scan that ran.
+    @Published var scannedThresholdMB: Double = 100
     @Published var showPicker = false
     @Published var itemToTrash: LargeFileItem?
     @Published var showConfirmTrash = false
@@ -136,7 +139,7 @@ struct LargeFilesView: View {
                                 Text("Nothing huge in here — all clear.")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(.primary)
-                                Text("No files above \(Int(state.thresholdMB)) MB in this folder.")
+                                Text("No files above \(Int(state.scannedThresholdMB)) MB in this folder.")
                                     .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
                             }
@@ -164,6 +167,7 @@ struct LargeFilesView: View {
     private func scan(_ folder: URL) {
         state.isScanning = true
         state.scannedFolder = folder
+        state.scannedThresholdMB = state.thresholdMB
         state.errorMessage = nil
         let threshold = Int64(state.thresholdMB) * 1_000_000
         DispatchQueue.global(qos: .userInitiated).async {

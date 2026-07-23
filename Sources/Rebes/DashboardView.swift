@@ -12,17 +12,10 @@ struct DashboardView: View {
     @ObservedObject private var monitor = SystemMonitor.shared
     @Binding var selection: SidebarItem?
 
-    /// Rough live health score driving the greeting tone — full marks unless
-    /// disk, memory, CPU load or temperature look stressed.
-    private var healthScore: Int {
-        var score = 100
-        let s = monitor.snapshot
-        if s.diskUsedPercent > 90 { score -= 30 } else if s.diskUsedPercent > 80 { score -= 10 }
-        if s.memUsedPercent > 90 { score -= 15 }
-        if s.cpuUsagePercent > 85 { score -= 15 }
-        if let t = monitor.cpuTemp, t > 85 { score -= 20 }
-        return max(0, score)
-    }
+    /// Greeting tone uses the SAME health model as the menu-bar ring and the
+    /// Mac Health card — one scorer, one truth (this used to be a second,
+    /// divergent deduction model).
+    private var healthScore: Int { monitor.health().score }
 
     var body: some View {
         ScrollView {

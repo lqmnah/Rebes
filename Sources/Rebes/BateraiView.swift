@@ -21,7 +21,6 @@ class BateraiState: ObservableObject {
 struct BateraiView: View {
     @StateObject private var state = BateraiState()
     @ObservedObject private var monitor = SystemMonitor.shared
-    let timer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -76,9 +75,14 @@ struct BateraiView: View {
             .padding(24)
         }
         .background(Theme.bg)
-        .onAppear { monitor.start(); refresh() }
+        .onAppear { monitor.start() }
         .onDisappear { monitor.stop() }
-        .onReceive(timer) { _ in refresh() }
+        // Single source of truth: SystemMonitor's 2.5s sampler (which also
+        // applies the TB0T temperature override). No second battery poller.
+        .onReceive(monitor.$battery) { b in
+            if let b { state.info = b }
+            state.isLoading = false
+        }
     }
 
     // MARK: - stacked stats (AlDente-style)
@@ -124,12 +128,17 @@ struct BateraiView: View {
         StackCard(title: "Battery") {
             StatRow(icon: "battery.75percent", accent: Theme.accentBattery, label: "Charge",
                     value: "\(info.currentCapacityMah) mAh")
-            StatRow(icon: "battery.100percent", accent: Theme.accentBattery, label: "Full Charge",
+            StatRow(icon: "battery.100percent", accent: Theme.accentBattery, label: "Full Charge (measured)",
                     value: "\(info.maxCapacityMah) mAh", raw: Double(info.maxCapacityMah))
+            if info.nominalCapacityMah > 0 {
+                StatRow(icon: "battery.75percent", accent: .secondary, label: "Nominal (gauge est.)",
+                        value: "\(info.nominalCapacityMah) mAh", raw: Double(info.nominalCapacityMah))
+            }
             StatRow(icon: "battery.100percent.bolt", accent: Theme.accentFans, label: "Design Capacity",
                     value: "\(info.designCapacityMah) mAh", raw: Double(info.designCapacityMah))
             StatRow(icon: "heart.fill", accent: Theme.accentUninstall, label: "Health",
-                    value: "\(info.healthPercent)%", raw: Double(info.healthPercent))
+                    value: "\(info.healthPercent)%\(info.healthEstimated ? " (est.)" : "")",
+                    raw: Double(info.healthPercent))
             StatRow(icon: "arrow.triangle.2.circlepath", accent: Theme.accentStartup, label: "Cycle Count",
                     value: "\(info.cycleCount)", raw: Double(info.cycleCount))
             StatRow(icon: "thermometer.medium", accent: Theme.accentFiles, label: "Temperature",
@@ -143,18 +152,4 @@ struct BateraiView: View {
         }
     }
 
-    // MARK: - plumbing
-
-    private func refresh() {
-        DispatchQueue.global(qos: .utility).async {
-            var info = BatteryReader.read()
-            if let smcTemp = SMC.shared.getValue("TB0T"), smcTemp > 0, smcTemp < 100 {
-                info?.temperatureC = smcTemp
-            }
-            DispatchQueue.main.async {
-                if let info { state.info = info }
-                state.isLoading = false
-            }
-        }
-    }
 }

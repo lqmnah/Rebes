@@ -259,7 +259,10 @@ struct UninstallerView: View {
             if !appOK {
                 usedAdmin = true
                 let q = AdminShell.shellQuote
-                let cmd = "mv \(q(app.url.path)) ~/.Trash/ 2>/dev/null || mv \(q(app.url.path)) \(q("\(NSHomeDirectory())/.Trash/"))"
+                // `~` in a root shell is /var/root — an app moved there would
+                // vanish invisibly instead of landing in the USER's Trash.
+                // Always move to the explicit user Trash path.
+                let cmd = "mv \(q(app.url.path)) \(q("\(NSHomeDirectory())/.Trash/"))"
                 appOK = AdminShell.runAsAdmin(cmd).ok
             }
 
