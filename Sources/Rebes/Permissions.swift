@@ -10,11 +10,13 @@
 import SwiftUI
 import AppKit
 import ApplicationServices
+import IOKit.hid
 import RebesCore
 
 enum PermissionKind: CaseIterable, Identifiable {
     case fullAccess     // root helper daemon (fan/battery control)
-    case accessibility  // CGEventTap for Keyboard Cleaning
+    case accessibility  // CGEventTap for Keyboard Cleaning (fallback lock)
+    case inputMonitoring // HID seizure for Keyboard Cleaning (TRUE full lock)
     case automation     // Apple Events → Finder (Empty Trash)
     case fullDisk       // read protected caches for a complete clean
 
@@ -24,6 +26,7 @@ enum PermissionKind: CaseIterable, Identifiable {
         switch self {
         case .fullAccess: return "Full Access (privileged helper)"
         case .accessibility: return "Accessibility"
+        case .inputMonitoring: return "Input Monitoring"
         case .automation: return "Automation (Finder)"
         case .fullDisk: return "Full Disk Access"
         }
@@ -31,7 +34,8 @@ enum PermissionKind: CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .fullAccess: return "Control fans and the battery charge limit without a password each time."
-        case .accessibility: return "Lock the keyboard during Keyboard Cleaning."
+        case .accessibility: return "Lock the keyboard during Keyboard Cleaning (basic lock)."
+        case .inputMonitoring: return "FULL keyboard lock during cleaning — media & Globe keys also die."
         case .automation: return "Empty the Trash on your behalf via Finder."
         case .fullDisk: return "Scan every cache and log for a complete cleanup."
         }
@@ -40,6 +44,7 @@ enum PermissionKind: CaseIterable, Identifiable {
         switch self {
         case .fullAccess: return "checkmark.shield.fill"
         case .accessibility: return "accessibility"
+        case .inputMonitoring: return "keyboard.fill"
         case .automation: return "app.connected.to.app.below.fill"
         case .fullDisk: return "externaldrive.fill"
         }
@@ -48,7 +53,7 @@ enum PermissionKind: CaseIterable, Identifiable {
     var required: Bool {
         switch self {
         case .fullAccess: return true
-        case .accessibility, .automation, .fullDisk: return false
+        case .accessibility, .inputMonitoring, .automation, .fullDisk: return false
         }
     }
 }
@@ -64,6 +69,7 @@ final class PermissionsManager: ObservableObject {
         // Query fresh each time (prompt:false) so a just-granted change is seen.
         let axOpts = ["AXTrustedCheckOptionPrompt": false] as CFDictionary
         granted[.accessibility] = AXIsProcessTrustedWithOptions(axOpts)
+        granted[.inputMonitoring] = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
         granted[.fullDisk] = Self.hasFullDiskAccess()
         granted[.automation] = Self.hasAutomation()
         // Confirm the daemon actually answers, not just that files exist.
@@ -114,6 +120,12 @@ final class PermissionsManager: ObservableObject {
             let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(opts)
             completion(false)
+        case .inputMonitoring:
+            // Triggers the system prompt when undetermined; user lands in
+            // System Settings → Privacy & Security → Input Monitoring.
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            Self.openSettings("Privacy_ListenEvent")
+            completion(false)
         case .automation:
             // Triggering a benign Finder event surfaces the system prompt.
             DispatchQueue.global(qos: .userInitiated).async {
@@ -135,6 +147,7 @@ final class PermissionsManager: ObservableObject {
     func openSettingsPane(for k: PermissionKind) {
         switch k {
         case .accessibility: Self.openSettings("Privacy_Accessibility")
+        case .inputMonitoring: Self.openSettings("Privacy_ListenEvent")
         case .automation: Self.openSettings("Privacy_Automation")
         case .fullDisk: Self.openSettings("Privacy_AllFiles")
         case .fullAccess: break
