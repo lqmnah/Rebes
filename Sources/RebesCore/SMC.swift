@@ -149,7 +149,8 @@ extension Float {
     init?(_ bytes: [UInt8]) {
         guard bytes.count >= 4 else { return nil }
         self = bytes.withUnsafeBytes {
-            return $0.load(fromByteOffset: 0, as: Self.self)
+            // Unaligned load: Array<UInt8> storage doesn't guarantee 4-byte alignment.
+            return $0.loadUnaligned(fromByteOffset: 0, as: Self.self)
         }
     }
 
@@ -219,6 +220,7 @@ public final class SMC: @unchecked Sendable {
     }
 
     public func getValue(_ key: String) -> Double? {
+        guard key.count == 4 else { return nil }   // FourCharCode precondition would trap
         var val: SMCVal_t = SMCVal_t(key)
         guard read(&val) == kIOReturnSuccess, val.dataSize > 0 else { return nil }
         // All-zero payloads usually mean "no sensor" — except keys where 0 is meaningful.
@@ -231,9 +233,16 @@ public final class SMC: @unchecked Sendable {
     /// Like getValue, but an all-zero payload decodes to 0 instead of nil.
     /// Needed for keys where zero is a legitimate value (e.g. a fan's minimum RPM).
     public func getValueAllowingZero(_ key: String) -> Double? {
+        guard key.count == 4 else { return nil }   // FourCharCode precondition would trap
         var val: SMCVal_t = SMCVal_t(key)
         guard read(&val) == kIOReturnSuccess, val.dataSize > 0 else { return nil }
         return decode(val)
+    }
+
+    /// Signed 16-bit fixed-point decode (sp78/sp87/sp96/spb4/spf0): sign-extend
+    /// before scaling so sub-zero sensors read negative instead of ~255.
+    private static func signedFixed(_ hi: UInt8, _ lo: UInt8, _ divisor: Double) -> Double {
+        Double(Int16(bitPattern: UInt16(hi) * 256 + UInt16(lo))) / divisor
     }
 
     private func decode(_ val: SMCVal_t) -> Double? {
@@ -256,17 +265,17 @@ public final class SMC: @unchecked Sendable {
             case SMCDataType.SP69.rawValue:
                 return Double(UInt16(val.bytes[0]) * 256 + UInt16(val.bytes[1])) / 512
             case SMCDataType.SP78.rawValue:
-                return Double(Int(val.bytes[0]) * 256 + Int(val.bytes[1])) / 256
+                return Self.signedFixed(val.bytes[0], val.bytes[1], 256)
             case SMCDataType.SP87.rawValue:
-                return Double(Int(val.bytes[0]) * 256 + Int(val.bytes[1])) / 128
+                return Self.signedFixed(val.bytes[0], val.bytes[1], 128)
             case SMCDataType.SP96.rawValue:
-                return Double(Int(val.bytes[0]) * 256 + Int(val.bytes[1])) / 64
+                return Self.signedFixed(val.bytes[0], val.bytes[1], 64)
             case SMCDataType.SPA5.rawValue:
                 return Double(UInt16(val.bytes[0]) * 256 + UInt16(val.bytes[1])) / 32
             case SMCDataType.SPB4.rawValue:
-                return Double(Int(val.bytes[0]) * 256 + Int(val.bytes[1])) / 16
+                return Self.signedFixed(val.bytes[0], val.bytes[1], 16)
             case SMCDataType.SPF0.rawValue:
-                return Double(Int(val.bytes[0]) * 256 + Int(val.bytes[1]))
+                return Self.signedFixed(val.bytes[0], val.bytes[1], 1)
             case SMCDataType.FLT.rawValue:
                 if let value = Float(val.bytes) {
                     return Double(value)
@@ -293,7 +302,7 @@ public final class SMC: @unchecked Sendable {
         var input: SMCKeyData_t = SMCKeyData_t()
         var output: SMCKeyData_t = SMCKeyData_t()
 
-        for i in 0...Int(keysNum) {
+        for i in 0..<Int(keysNum) {
             input = SMCKeyData_t()
             output = SMCKeyData_t()
 
@@ -483,10 +492,10 @@ public final class SMC: @unchecked Sendable {
     }
 
     @discardableResult
-    public func setFanSpeed(_ id: Int, speed: Int) -> Bool {
+    public func setFanSpeed(_ id: Int, speed: Int, shouldAbort: () -> Bool = { false }) -> Bool {
         if let maxSpeed = self.getValue("F\(id)Mx"),
            speed > Int(maxSpeed) {
-            return setFanSpeed(id, speed: Int(maxSpeed))
+            return setFanSpeed(id, speed: Int(maxSpeed), shouldAbort: shouldAbort)
         }
 
         #if arch(arm64)
@@ -497,7 +506,7 @@ public final class SMC: @unchecked Sendable {
             return false
         }
         if modeVal.bytes[0] != 1 {
-            if !unlockFanControl(fanId: id) { return false }
+            if !unlockFanControl(fanId: id, shouldAbort: shouldAbort) { return false }
         }
         #endif
 
@@ -543,10 +552,11 @@ public final class SMC: @unchecked Sendable {
     }
 
     #if arch(arm64)
-    private func writeWithRetry(_ value: SMCVal_t, maxAttempts: Int = 10, delayMicros: UInt32 = 50_000) -> Bool {
+    private func writeWithRetry(_ value: SMCVal_t, maxAttempts: Int = 10, delayMicros: UInt32 = 50_000, shouldAbort: () -> Bool = { false }) -> Bool {
         let mutableValue = value
         var lastResult: kern_return_t = kIOReturnSuccess
         for attempt in 0..<maxAttempts {
+            if shouldAbort() { return false }   // daemon shutting down — bail fast
             lastResult = write(mutableValue)
             if lastResult == kIOReturnSuccess {
                 return true
@@ -559,7 +569,7 @@ public final class SMC: @unchecked Sendable {
         return false
     }
 
-    private func unlockFanControl(fanId: Int) -> Bool {
+    private func unlockFanControl(fanId: Int, shouldAbort: () -> Bool = { false }) -> Bool {
         // Try direct mode write first (works on M5+ without Ftst)
         let modeKey = fanModeKey(fanId)
         var modeVal = SMCVal_t(modeKey)
@@ -581,21 +591,26 @@ public final class SMC: @unchecked Sendable {
         }
 
         if ftstVal.bytes[0] == 1 {
-            return retryModeWrite(fanId: fanId, maxAttempts: 20)
+            return retryModeWrite(fanId: fanId, maxAttempts: 20, shouldAbort: shouldAbort)
         }
 
         ftstVal.bytes[0] = 1
-        if !writeWithRetry(ftstVal, maxAttempts: 100) {
+        if !writeWithRetry(ftstVal, maxAttempts: 100, shouldAbort: shouldAbort) {
             return false
         }
 
-        // Wait for thermalmonitord to yield control
-        usleep(3_000_000)
+        // Wait for thermalmonitord to yield control — in 100ms slices so a
+        // pending daemon shutdown can abort the wait instead of blocking
+        // ~3s past launchd's ExitTimeOut.
+        for _ in 0..<30 {
+            if shouldAbort() { return false }
+            usleep(100_000)
+        }
 
-        return retryModeWrite(fanId: fanId, maxAttempts: 300)
+        return retryModeWrite(fanId: fanId, maxAttempts: 300, shouldAbort: shouldAbort)
     }
 
-    private func retryModeWrite(fanId: Int, maxAttempts: Int) -> Bool {
+    private func retryModeWrite(fanId: Int, maxAttempts: Int, shouldAbort: () -> Bool = { false }) -> Bool {
         let modeKey = fanModeKey(fanId)
         var modeVal = SMCVal_t(modeKey)
         let result = read(&modeVal)
@@ -604,7 +619,7 @@ public final class SMC: @unchecked Sendable {
             return false
         }
         modeVal.bytes[0] = 1
-        return writeWithRetry(modeVal, maxAttempts: maxAttempts, delayMicros: 100_000)
+        return writeWithRetry(modeVal, maxAttempts: maxAttempts, delayMicros: 100_000, shouldAbort: shouldAbort)
     }
 
     public func resetFanControl() -> Bool {

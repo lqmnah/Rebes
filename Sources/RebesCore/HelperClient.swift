@@ -137,9 +137,12 @@ public final class HelperClient: @unchecked Sendable {
     /// Perform a privileged action. Blocks — call from a background queue.
     /// `fallbackHelperBinary` = bundled RebesHelper path for the osascript route.
     public func perform(_ action: Action, fallbackHelperBinary: String) -> (ok: Bool, message: String) {
-        if isDaemonInstalled(), let proxy = remoteProxy(errorHandler: { _ in }) {
-            let sema = DispatchSemaphore(value: 0)
-            let outcome = Atomic<(Bool, String)?>(nil)
+        let sema = DispatchSemaphore(value: 0)
+        let outcome = Atomic<(Bool, String)?>(nil)
+        // Error handler MUST signal — a dead daemon connection would otherwise
+        // stall the full 10s timeout before the osascript fallback (and its
+        // password prompt) even though the failure was instant.
+        if isDaemonInstalled(), let proxy = remoteProxy(errorHandler: { _ in sema.signal() }) {
             let handler: (Bool, String) -> Void = { ok, msg in
                 outcome.set((ok, msg))
                 sema.signal()

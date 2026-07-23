@@ -38,7 +38,15 @@ public final class SafeCleaner: Sendable {
     }
     
     public func isAllowed(path: String) -> Bool {
-        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        // Resolve symlinks in the PARENT chain so a symlinked whitelisted root
+        // (e.g. ~/Library/Caches moved to an external drive) can't smuggle
+        // deletions outside the intended locations. The final component is
+        // deliberately NOT resolved: trashing a symlink trashes the link,
+        // not its target, which is safe.
+        let raw = URL(fileURLWithPath: path).standardizedFileURL
+        let standardized = raw.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(raw.lastPathComponent).path
         
         if standardized == homeDir { return false }
         if standardized == "\(homeDir)/Library" { return false }

@@ -13,7 +13,8 @@ public let kHelperMachServiceName = "com.lqmnah.rebes.helper"
 @objc public protocol RebesHelperProtocol {
     /// Liveness + version check.
     func ping(reply: @escaping (String) -> Void)
-    /// Set the CHWA charge-limit flag (0 or 1). Validated daemon-side.
+    /// Wire-compat shim: flips `enabled` on the engine's charge config (the
+    /// CHWA key is retired — the ChargeLoopEngine owns all charge writes).
     func setChargeLimit(_ value: Int, reply: @escaping (Bool, String) -> Void)
     /// Restore a fan to automatic mode (relocks Ftst when all fans are auto).
     func setFanAuto(_ index: Int, reply: @escaping (Bool, String) -> Void)

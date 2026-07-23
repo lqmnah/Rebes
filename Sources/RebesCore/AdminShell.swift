@@ -47,12 +47,22 @@ public enum AdminShell {
             return Result(ok: false, output: error.localizedDescription)
         }
 
-        // Read to EOF before waiting to avoid pipe-buffer deadlock.
+        // Read BOTH pipes concurrently to EOF before waiting — sequential
+        // reads deadlock if the child fills the stderr pipe buffer while
+        // stdout is still open.
+        final class DataBox: @unchecked Sendable { var data = Data() }
+        let errBox = DataBox()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().async {
+            errBox.data.append(err.fileHandleForReading.readDataToEndOfFile())
+            group.leave()
+        }
         let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        group.wait()
 
-        let combined = [outData, errData]
+        let combined = [outData, errBox.data]
             .compactMap { String(data: $0, encoding: .utf8) }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)

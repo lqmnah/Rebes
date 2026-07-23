@@ -42,7 +42,9 @@ public enum DiskScanner {
             let size = SafeCleaner.shared.directorySize(url: child)
             var count = 0
             if isDir {
-                count = (try? fm.contentsOfDirectory(atPath: child.path).count) ?? 0
+                // Same .skipsHiddenFiles options as the listing so hidden files
+                // don't inflate the count.
+                count = (try? fm.contentsOfDirectory(at: child, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]).count) ?? 0
             }
             entries.append(DiskEntry(url: child, size: size, isDirectory: isDir, childCount: count))
         }

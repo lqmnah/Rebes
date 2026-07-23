@@ -27,7 +27,11 @@ public struct HelperWhitelist {
         case "ACLC":         // MagSafe LED: system/off/green/orange
             return v == 0x00 || v == 0x01 || v == 0x03 || v == 0x04
         default:
-            if key.hasPrefix("F") && key.hasSuffix("Md") && key.count == 4 {
+            // Fan mode keys: "F<n>Md" (Intel) and "F<n>md" (Apple Silicon).
+            if key.count == 4, key.hasPrefix("F"),
+               key.hasSuffix("Md") || key.hasSuffix("md") {
+                let idxChar = key[key.index(key.startIndex, offsetBy: 1)]
+                guard idxChar.isNumber else { return false }
                 return v == 0x00 || v == 0x01
             }
             return false

@@ -49,6 +49,9 @@ extension SafeCleaner {
                             totalSize += SafeCleaner.shared.directorySize(url: item)
                         }
                     } catch {
+                        // Never hide a scan failure — a silent zero makes the
+                        // user believe their disk is cleaner than it is.
+                        SafeCleaner.shared.logAction("scanJunk: failed to read \(path) — \(error.localizedDescription)")
                     }
                 }
             }

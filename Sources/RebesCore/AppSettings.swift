@@ -130,7 +130,9 @@ public final class AppSettings: @unchecked Sendable {
                   let cfg = try? JSONDecoder().decode(ChargeConfig.self, from: data) else {
                 return ChargeConfig()
             }
-            return cfg
+            // Always sanitized — a tampered/legacy `defaults write` must never
+            // propagate out-of-range charge values to consumers.
+            return cfg.sanitized()
         }
         set {
             if let data = try? JSONEncoder().encode(newValue) {
