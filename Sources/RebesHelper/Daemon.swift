@@ -40,7 +40,13 @@ final class HelperService: NSObject, RebesHelperProtocol {
 
     func chargeStatus(withReply reply: @escaping (Data) -> Void) {
         let status = ChargeLoopEngine.shared.currentStatus
-        reply((try? JSONEncoder().encode(status)) ?? Data())
+        if let data = try? JSONEncoder().encode(status) {
+            reply(data)
+        } else {
+            // Never fail silently — an empty reply reads as "daemon offline".
+            NSLog("rebes-helper: chargeStatus encode failed")
+            reply(Data())
+        }
     }
 
     func startTopUp(withReply reply: @escaping (Bool, String) -> Void) {
@@ -60,41 +66,47 @@ final class HelperService: NSObject, RebesHelperProtocol {
     }
 
     func setFanAuto(_ index: Int, reply: @escaping (Bool, String) -> Void) {
-        let smc = SMC.shared
-        let fNum = Int(smc.getValue("FNum") ?? 0)
-        guard index >= 0, index < fNum else {
-            reply(false, "refused: fan index out of range")
-            return
+        // Routed onto the curve engine's serial queue — the single-writer rule:
+        // a manual SMC fan write must never interleave with a curve tick.
+        FanCurveEngine.shared.serialize {
+            let smc = SMC.shared
+            let fNum = Int(smc.getValue("FNum") ?? 0)
+            guard index >= 0, index < fNum else {
+                reply(false, "refused: fan index out of range")
+                return
+            }
+            guard smc.setFanMode(index, mode: .automatic) else {
+                reply(false, "SMC: failed to restore automatic mode")
+                return
+            }
+            #if arch(arm64)
+            let allAuto = (0..<fNum).allSatisfy {
+                Int(smc.getValueAllowingZero(smc.fanModeKey($0)) ?? 1) == 0
+            }
+            if allAuto && !smc.resetFanControl() {
+                reply(false, "fan is automatic but relocking fan control failed")
+                return
+            }
+            #endif
+            reply(true, "OK")
         }
-        guard smc.setFanMode(index, mode: .automatic) else {
-            reply(false, "SMC: failed to restore automatic mode")
-            return
-        }
-        #if arch(arm64)
-        let allAuto = (0..<fNum).allSatisfy {
-            Int(smc.getValueAllowingZero(smc.fanModeKey($0)) ?? 1) == 0
-        }
-        if allAuto && !smc.resetFanControl() {
-            reply(false, "fan is automatic but relocking fan control failed")
-            return
-        }
-        #endif
-        reply(true, "OK")
     }
 
     func setFanSpeed(_ index: Int, rpm: Float, reply: @escaping (Bool, String) -> Void) {
-        let smc = SMC.shared
-        let fNum = Int(smc.getValue("FNum") ?? 0)
-        guard rpm.isFinite,
-              HelperWhitelist.validateFanTarget(key: "F\(index)Tg", target: rpm, fNum: fNum, getBounds: { i in
-                  guard let mn = smc.getValueAllowingZero("F\(i)Mn"),
-                        let mx = smc.getValue("F\(i)Mx"), mx > mn else { return nil }
-                  return (Float(mn), Float(mx))
-              }) else {
-            reply(false, "refused: rpm outside hardware bounds")
-            return
+        FanCurveEngine.shared.serialize {
+            let smc = SMC.shared
+            let fNum = Int(smc.getValue("FNum") ?? 0)
+            guard rpm.isFinite,
+                  HelperWhitelist.validateFanTarget(key: "F\(index)Tg", target: rpm, fNum: fNum, getBounds: { i in
+                      guard let mn = smc.getValueAllowingZero("F\(i)Mn"),
+                            let mx = smc.getValue("F\(i)Mx"), mx > mn else { return nil }
+                      return (Float(mn), Float(mx))
+                  }) else {
+                reply(false, "refused: rpm outside hardware bounds")
+                return
+            }
+            reply(smc.setFanSpeed(index, speed: Int(rpm), shouldAbort: { FanCurveEngine.shared.cancelRequested }), "done")
         }
-        reply(smc.setFanSpeed(index, speed: Int(rpm)), "done")
     }
 
     func setFanCurve(enabled: Bool, curveJSON: String, reply: @escaping (Bool, String) -> Void) {
@@ -150,6 +162,7 @@ final class HelperService: NSObject, RebesHelperProtocol {
 }
 
 /// Run a fixed absolute-path executable and capture its exit status + stderr.
+/// A hung child is terminated after 30s so it can't leak a worker thread forever.
 private func runFixed(_ path: String, _ args: [String]) -> (status: Int32, stderr: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: path)
@@ -160,43 +173,63 @@ private func runFixed(_ path: String, _ args: [String]) -> (status: Int32, stder
     do { try p.run() } catch {
         return (-1, "\(error.localizedDescription)")
     }
+    let watchdog = DispatchSource.makeTimerSource(queue: .global())
+    watchdog.schedule(deadline: .now() + 30)
+    watchdog.setEventHandler { p.terminate() }
+    watchdog.resume()
     let data = err.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
+    watchdog.cancel()
     let msg = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return (p.terminationStatus, msg)
 }
 
 /// Only accept XPC connections from a process signed with our own identifier
-/// AND whose executable lives inside a Rebes.app bundle.
+/// AND whose executable is the Rebes.app binary in /Applications or inside the
+/// connecting user's own home directory.
 ///
-/// KNOWN LIMITATION (documented in the README): with an ad-hoc-signed build
-/// there is no Developer ID anchor to pin, so a determined local process
-/// could re-sign itself with this identifier. The identifier + bundle-path
-/// checks raise the bar, and the HelperWhitelist bounds every reachable
-/// write (fan targets clamped to hardware bounds, charge values to their
-/// documented safe sets, discharge floor 20%). For a hardened install, build
-/// and sign with your own Developer ID and tighten this requirement to
+/// The path policy is the teeth: on ad-hoc-signed builds another local user
+/// (e.g. guest) could re-sign a copy with our identifier, but they cannot
+/// write to /Applications or into the owner's home — so they cannot drive
+/// this root daemon. A process running AS THE SAME USER could still place a
+/// re-signed copy in that home; that residual surface is bounded by the
+/// HelperWhitelist (fan targets clamped to hardware bounds, charge values to
+/// their documented safe sets, discharge floor 20%). For a fully hardened
+/// install, sign with your own Developer ID and tighten the requirement to
 /// `anchor apple generic and certificate leaf[subject.OU] = "<team id>"`.
+/// (Swift exposes no audit_token on NSXPCConnection; identity is PID-based,
+/// with the path policy as the primary barrier.)
 func connectionIsTrusted(_ connection: NSXPCConnection) -> Bool {
     let pid = connection.processIdentifier
-    guard let secCode = copyCode(forPID: pid) else { return false }
+    let attrs = [kSecGuestAttributePid: pid] as CFDictionary
+    var code: SecCode?
+    guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &code) == errSecSuccess,
+          let secCode = code else { return false }
+
     let req = "identifier \"com.lqmnah.rebes\"" as CFString
     var requirement: SecRequirement?
     guard SecRequirementCreateWithString(req, [], &requirement) == errSecSuccess,
           let requirement,
           SecCodeCheckValidity(secCode, [], requirement) == errSecSuccess else { return false }
-    // Peer executable must be the app binary inside a Rebes.app bundle.
+
+    // Peer executable must be the app binary inside a Rebes.app bundle, in
+    // /Applications or the connecting user's own home.
     var pathBuf = [CChar](repeating: 0, count: 4 * 1024)
     guard proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count)) > 0 else { return false }
-    let path = String(cString: pathBuf)
-    return path.hasSuffix("/Rebes.app/Contents/MacOS/Rebes")
-}
+    let path = String(decoding: pathBuf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
 
-private func copyCode(forPID pid: pid_t) -> SecCode? {
-    let attrs = [kSecGuestAttributePid: pid] as CFDictionary
-    var code: SecCode?
-    guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &code) == errSecSuccess else { return nil }
-    return code
+    // Peer's home directory from its uid (root's home would be useless here).
+    var home = ""
+    var info = proc_bsdshortinfo()
+    let n = proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdshortinfo>.stride))
+    if n > 0, let pw = getpwuid(info.pbsi_uid), let dir = pw.pointee.pw_dir {
+        home = String(cString: dir)
+    }
+
+    let inApplications = path == "/Applications/Rebes.app/Contents/MacOS/Rebes"
+    let inUserHome = !home.isEmpty && home != "/" &&
+        path.hasPrefix(home + "/") && path.hasSuffix("/Rebes.app/Contents/MacOS/Rebes")
+    return inApplications || inUserHome
 }
 
 /// Runs the temperature→fan-speed curve entirely inside the root daemon so it
@@ -223,6 +256,21 @@ final class FanCurveEngine: @unchecked Sendable {
 
     private let tempKeys = ["Tp01", "Tp05", "Tp09", "TC10", "Tp0D"]
 
+    // Cancellation flag for the SIGTERM path: set from OUTSIDE the serial
+    // queue (a queued write would sit behind the in-flight tick it needs to
+    // interrupt), checked inside SMC retry loops so a stop() can never be
+    // starved past launchd's ExitTimeOut.
+    private let cancelLock = NSLock()
+    private var _cancelRequested = false
+    /// Internal (not private) so RPC fan writes can also honor a pending shutdown.
+    var cancelRequested: Bool { cancelLock.lock(); defer { cancelLock.unlock() }; return _cancelRequested }
+    private func setCancelRequested(_ v: Bool) { cancelLock.lock(); _cancelRequested = v; cancelLock.unlock() }
+
+    // Restore-automatic self-heal: a transient SMC failure at stop() must not
+    // leave fans forced while status reports "stopped".
+    private var restoreRetry: DispatchSourceTimer?
+    private var restoreAttempts = 0
+
     var isRunning: Bool { stateLock.lock(); defer { stateLock.unlock() }; return _isRunning }
     var lastStatus: String { stateLock.lock(); defer { stateLock.unlock() }; return _lastStatus }
 
@@ -232,8 +280,14 @@ final class FanCurveEngine: @unchecked Sendable {
         if let status { _lastStatus = status }
     }
 
+    /// Run a manual fan operation on the engine queue — the single-writer rule:
+    /// a manual SMC write must never interleave with a curve tick.
+    func serialize(_ work: @escaping () -> Void) { queue.async(execute: work) }
+
     func start(curve: [FanCurvePoint]) {
         queue.async {
+            self.restoreRetry?.cancel()
+            self.restoreRetry = nil
             self.curve = curve
             self.failedReads = 0
             if self.timer == nil {
@@ -248,23 +302,65 @@ final class FanCurveEngine: @unchecked Sendable {
     }
 
     /// Stop the curve and restore automatic control. Runs synchronously on the
-    /// engine queue so it cannot race an in-flight tick.
+    /// engine queue so it cannot race an in-flight tick; the cancel flag makes
+    /// any in-flight tick's SMC retry loops bail fast so the stop can't be
+    /// starved past launchd's ExitTimeOut.
     func stop() {
+        setCancelRequested(true)
         queue.sync {
             self.timer?.cancel()
             self.timer = nil
             self.setState(running: false, status: "stopped")
             self.restoreAutomatic()
         }
+        setCancelRequested(false)
     }
 
     private func restoreAutomatic() {
+        if attemptRestore() {
+            restoreRetry?.cancel()
+            restoreRetry = nil
+            restoreAttempts = 0
+        } else {
+            scheduleRestoreRetry()
+        }
+    }
+
+    private func attemptRestore() -> Bool {
         let smc = SMC.shared
         let fNum = Int(smc.getValue("FNum") ?? 0)
-        for i in 0..<fNum { _ = smc.setFanMode(i, mode: .automatic) }
+        var ok = true
+        for i in 0..<fNum { ok = smc.setFanMode(i, mode: .automatic) && ok }
         #if arch(arm64)
-        _ = smc.resetFanControl()
+        ok = smc.resetFanControl() && ok
         #endif
+        return ok
+    }
+
+    /// Retry the automatic-mode restore every 5s (max 6 attempts) until the
+    /// hardware agrees — same self-heal pattern the charge engine uses.
+    /// Runs on `queue`.
+    private func scheduleRestoreRetry() {
+        guard restoreRetry == nil else { return }
+        restoreAttempts = 0
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 5, repeating: 5.0)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.restoreAttempts += 1
+            if self.attemptRestore() {
+                self.restoreRetry?.cancel()
+                self.restoreRetry = nil
+                self.restoreAttempts = 0
+                self.setState(status: "stopped")
+            } else if self.restoreAttempts >= 6 {
+                self.restoreRetry?.cancel()
+                self.restoreRetry = nil
+                self.setState(status: "WARNING: restore automatic failed — fans may still be forced")
+            }
+        }
+        t.resume()
+        restoreRetry = t
     }
 
     private func tick() {
@@ -294,7 +390,7 @@ final class FanCurveEngine: @unchecked Sendable {
             guard rpm.isFinite,
                   HelperWhitelist.validateFanTarget(key: "F\(i)Tg", target: rpm, fNum: fNum,
                                                     getBounds: { _ in (Float(mn), Float(mx)) }) else { continue }
-            if smc.setFanSpeed(i, speed: Int(rpm)) { applied.append("\(Int(rpm))") }
+            if smc.setFanSpeed(i, speed: Int(rpm), shouldAbort: { [weak self] in self?.cancelRequested ?? true }) { applied.append("\(Int(rpm))") }
         }
         setState(status: String(format: "%.0f°C → %.0f%% → %@ rpm", temp, pct, applied.joined(separator: "/")))
     }
@@ -384,7 +480,9 @@ final class ChargeLoopEngine: @unchecked Sendable {
             self.probeIfNeeded()
             if let persisted = ChargeLoopEngine.loadPersistedConfig() {
                 self.config = persisted.sanitized()
-                if self.config.enabled { self.phase = .maintain }
+                // .maintain on an unsupported machine would be a phantom status
+                // (the timer refuses to start) — stay .idle.
+                if self.config.enabled, self.mode != .unsupported { self.phase = .maintain }
             }
             self.reconcileHardwareAfterRestart()
             self.startTimerLocked()
@@ -539,16 +637,43 @@ final class ChargeLoopEngine: @unchecked Sendable {
 
     // MARK: persistence (root-owned, daemon-writable)
 
-    static func persist(_ config: ChargeConfig) {
+    /// The state dir lives under /Library/Application Support, which is
+    /// group-admin writable. It must be root-owned, a real directory (not a
+    /// symlink) and 0700 — otherwise any admin-group process could pre-seed
+    /// `band-owned` (tricking the daemon into deactivating the user's NATIVE
+    /// charge limit) or spoof the persisted config.
+    @discardableResult
+    static func secureStateDir() -> Bool {
         let fm = FileManager.default
         try? fm.createDirectory(atPath: stateDir, withIntermediateDirectories: true,
-                                attributes: [.posixPermissions: 0o755])
+                                attributes: [.posixPermissions: 0o700])
+        var st = stat()
+        guard lstat(stateDir, &st) == 0,
+              (st.st_mode & S_IFMT) == S_IFDIR,
+              st.st_uid == 0 else {
+            NSLog("rebes-helper: state dir failed security check (owner/symlink)")
+            return false
+        }
+        _ = chmod(stateDir, 0o700)   // tighten dirs created by older builds
+        return true
+    }
+
+    static func persist(_ config: ChargeConfig) {
+        guard secureStateDir() else { return }
+        let fm = FileManager.default
         guard let data = try? JSONEncoder().encode(config) else { return }
-        try? data.write(to: URL(fileURLWithPath: configPath), options: .atomic)
-        try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: configPath)
+        do {
+            try data.write(to: URL(fileURLWithPath: configPath), options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configPath)
+        } catch {
+            // A failed persist loses re-arm-after-reboot while the UI shows
+            // the limit enabled — never fail silently.
+            NSLog("rebes-helper: failed to persist charge config: \(error.localizedDescription)")
+        }
     }
 
     static func loadPersistedConfig() -> ChargeConfig? {
+        guard secureStateDir() else { return nil }
         guard let data = FileManager.default.contents(atPath: configPath) else { return nil }
         return try? JSONDecoder().decode(ChargeConfig.self, from: data)
     }
@@ -560,8 +685,7 @@ final class ChargeLoopEngine: @unchecked Sendable {
     static func setBandOwned(_ owned: Bool) {
         let fm = FileManager.default
         if owned {
-            try? fm.createDirectory(atPath: stateDir, withIntermediateDirectories: true,
-                                    attributes: [.posixPermissions: 0o755])
+            guard secureStateDir() else { return }
             fm.createFile(atPath: bandOwnedPath, contents: Data())
         } else {
             try? fm.removeItem(atPath: bandOwnedPath)

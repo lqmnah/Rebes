@@ -36,7 +36,11 @@ func refuseIfDaemonRunning() {
     let out = Pipe()
     p.standardOutput = out
     p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else { return }
+    // Fail CLOSED: if we can't determine daemon state, refuse to write charge
+    // keys rather than risk two writers on the strict band sequence.
+    guard (try? p.run()) != nil else {
+        fail("could not determine daemon state — refusing to write charge keys", code: 2)
+    }
     let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
     let text = String(data: data, encoding: .utf8) ?? ""
