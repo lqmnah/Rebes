@@ -48,6 +48,9 @@ final class SystemMonitor: ObservableObject {
     @Published var cpuTempHistory: [MetricPoint] = []
     @Published var powerHistory: [MetricPoint] = []
     @Published var cpuHistory: [MetricPoint] = []
+    /// Persistent battery-health trend (30-min snapshots, ~90 days) — the one
+    /// chart that must NOT reset on relaunch.
+    @Published var batteryHealthHistory: [MetricPoint] = []
 
     private var timer: Timer?
     private var subscribers = 0
@@ -70,7 +73,7 @@ final class SystemMonitor: ObservableObject {
         scores.append(min(100, max(0, (95 - snapshot.memUsedPercent) / 45 * 100)))
         // Battery health (if present)
         if let b = battery, b.healthPercent > 0 {
-            scores.append(min(100, Double(b.healthPercent) / 80 * 100))
+            scores.append(min(100, b.healthPercent / 80 * 100))
         }
         // Thermal: 100 at ≤60°C, 0 at ≥95°C
         if let t = cpuTemp {
@@ -128,6 +131,14 @@ final class SystemMonitor: ObservableObject {
             if let btemp = smc.getValue("TB0T"), btemp > 0, btemp < 100 {
                 battery?.temperatureC = btemp
             }
+            // Persistent health history: the store dedupes to one snapshot per
+            // 30 min, so calling it every tick is free.
+            if let b = battery, b.fullChargeCapacityMah > 0 {
+                BatteryHistoryStore.shared.record(
+                    fcc: b.fullChargeCapacityMah, health: b.healthPercent,
+                    cycles: b.cycleCount, tempC: b.temperatureC)
+            }
+            let healthTrend = BatteryHistoryStore.shared.all.map { MetricPoint(t: $0.t, value: $0.health) }
             // Power telemetry: allow zero (PDTR is legitimately 0 W on battery);
             // an absent key fails the read and stays nil so its UI row hides.
             let systemPower = smc.getValueAllowingZero("PSTR")
@@ -152,6 +163,7 @@ final class SystemMonitor: ObservableObject {
                     if b.temperatureC > 0 { monitor.push(&monitor.batteryTempHistory, b.temperatureC, at: now) }
                     monitor.push(&monitor.powerHistory, b.watts, at: now)
                 }
+                monitor.batteryHealthHistory = healthTrend
 
                 // "Stay awake until the charge limit" is a FEATURE, not a view
                 // concern — evaluate it from this permanent sampler so the

@@ -153,6 +153,7 @@ struct ContentView: View {
     @StateObject private var appState = AppState()
     @StateObject private var hoverModel = SidebarHoverModel()
     @EnvironmentObject private var boot: AppBootstrap
+    @Environment(\.accessibilityReduceMotion) private var reduceMotionDetail
     @Namespace private var sidebarPill
 
     var body: some View {
@@ -227,6 +228,10 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 800, minHeight: 640)
+            // Tab-content cross-fade (~180ms spec) on destination switches.
+            .id(appState.selection)
+            .transition(.opacity)
+            .animation(reduceMotionDetail ? .none : .easeInOut(duration: 0.18), value: appState.selection)
         }
         .background(GlassBackdrop().ignoresSafeArea())
         .onReceive(NotificationCenter.default.publisher(for: .rebesNavigate)) { note in

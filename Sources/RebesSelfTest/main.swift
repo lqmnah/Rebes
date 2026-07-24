@@ -269,6 +269,21 @@ func testDirectorySize() throws {
     }
 }
 
+func testBatteryHistoryStore() {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let store = BatteryHistoryStore(fileURL: url)
+    store.record(fcc: 7131, health: 95.1, cycles: 237, tempC: 31.0)
+    store.record(fcc: 7131, health: 95.1, cycles: 237, tempC: 31.0)   // <30 min → deduped
+    store.record(fcc: 0, health: 0, cycles: 0, tempC: 0)               // junk → refused
+    assertBool(store.all.count == 1, true)
+    // Persistence round-trip: a fresh instance on the same file sees it.
+    let reloaded = BatteryHistoryStore(fileURL: url)
+    assertBool(reloaded.all.count == 1, true)
+    assertBool(reloaded.all.first?.health == 95.1, true)
+    assertBool(reloaded.all.first?.fcc == 7131, true)
+}
+
 do {
     testSafeCleaner()
     testLeftoversMatcher()
@@ -277,6 +292,7 @@ do {
     testChargeConfigRoundTrip()
     testBandComputation()
     try testDirectorySize()
+    testBatteryHistoryStore()
     print("PASS")
     exit(0)
 } catch {

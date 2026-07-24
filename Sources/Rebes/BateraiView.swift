@@ -65,6 +65,13 @@ struct BateraiView: View {
                         MetricChart(title: "CPU Temperature",
                                     latest: monitor.cpuTemp.map { String(format: "%.0f°C", $0) } ?? "—",
                                     points: monitor.cpuTempHistory, accent: Theme.accentFiles, unitSuffix: "°")
+                        // Persistent 30-min snapshots — survives relaunch, so
+                        // health degradation is visible over weeks/months.
+                        MetricChart(title: "Health Trend",
+                                    latest: String(format: "%.1f%%", info.healthPercent),
+                                    points: monitor.batteryHealthHistory,
+                                    accent: Theme.accentUninstall, unitSuffix: "%",
+                                    yRange: healthTrendRange)
                     }
                     .cascadeIn(2)
                 } else {
@@ -83,6 +90,14 @@ struct BateraiView: View {
             if let b { state.info = b }
             state.isLoading = false
         }
+    }
+
+    /// Snug y-range around the health data so the trend is actually visible
+    /// (a flat 0...100 would hide a 95→92 slide).
+    private var healthTrendRange: ClosedRange<Double>? {
+        let vals = monitor.batteryHealthHistory.map(\.value)
+        guard let lo = vals.min(), let hi = vals.max(), hi > 0 else { return nil }
+        return max(0, lo - 2)...min(100, hi + 2)
     }
 
     // MARK: - stacked stats (AlDente-style)
@@ -137,10 +152,11 @@ struct BateraiView: View {
             StatRow(icon: "battery.100percent.bolt", accent: Theme.accentFans, label: "Design Capacity",
                     value: "\(info.designCapacityMah) mAh", raw: Double(info.designCapacityMah))
             StatRow(icon: "heart.fill", accent: Theme.accentUninstall, label: "Health",
-                    value: "\(info.healthPercent)%\(info.healthEstimated ? " (est.)" : "")",
-                    raw: Double(info.healthPercent))
+                    value: String(format: "%.1f%%", info.healthPercent) + (info.healthEstimated ? " (est.)" : ""),
+                    raw: info.healthPercent)
             StatRow(icon: "arrow.triangle.2.circlepath", accent: Theme.accentStartup, label: "Cycle Count",
-                    value: "\(info.cycleCount)", raw: Double(info.cycleCount))
+                    value: info.designCycleCount > 0 ? "\(info.cycleCount) / \(info.designCycleCount)" : "\(info.cycleCount)",
+                    raw: Double(info.cycleCount))
             StatRow(icon: "thermometer.medium", accent: Theme.accentFiles, label: "Temperature",
                     value: String(format: "%.1f°C", info.temperatureC))
             StatRow(icon: "checkmark.seal", accent: Theme.accentBattery, label: "Condition",

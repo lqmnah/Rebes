@@ -5,7 +5,10 @@ public struct BatteryInfo {
     public var currentChargePercent: Int
     public var isCharging: Bool
     public var cycleCount: Int
-    public var healthPercent: Int
+    /// Battery health in percent, one decimal (measured FCC / design).
+    public var healthPercent: Double
+    /// Design cycle count (e.g. 1000); 0 when the firmware doesn't publish it.
+    public var designCycleCount: Int = 0
     public var temperatureC: Double
     public var adapterWattage: Int?
     /// Instantaneous battery power in watts (negative = discharging).
@@ -55,7 +58,10 @@ public class BatteryReader {
         let fcc = dict["AppleRawMaxCapacity"] as? Int ?? bd?["FullChargeCapacity"] as? Int ?? 0
         let healthEstimated = fcc <= 0
         let measured = fcc > 0 ? fcc : nominal
-        let health = design > 0 && measured > 0 ? Int((Double(measured) / Double(design)) * 100) : 0
+        // One decimal, rounded — matches how macOS/AlDente display health.
+        let health = design > 0 && measured > 0
+            ? ((Double(measured) / Double(design)) * 1000).rounded() / 10
+            : 0
 
         var tempC: Double = 0
         if let t = dict["Temperature"] as? Int ?? bd?["Temperature"] as? Int {
@@ -107,6 +113,7 @@ public class BatteryReader {
         info.nominalCapacityMah = nominal
         info.fullChargeCapacityMah = fcc
         info.healthEstimated = healthEstimated
+        info.designCycleCount = dict["DesignCycleCount9C"] as? Int ?? bd?["DesignCycleCount9C"] as? Int ?? 0
         return info
     }
 

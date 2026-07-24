@@ -254,7 +254,7 @@ struct MenuBarPanel: View {
                 HStack(alignment: .top, spacing: 8) {
                     if let b = monitor.battery {
                         statCard("battery.75", "Battery", "\(b.currentChargePercent)%",
-                                 String(format: "%.1f W · health %d%%", abs(b.watts), b.healthPercent),
+                                 String(format: "%.1f W · health %.1f%%", abs(b.watts), b.healthPercent),
                                  raw: Double(b.currentChargePercent),
                                  Double(b.currentChargePercent)/100, Theme.accentBattery) { openApp(.battery) }
                     } else {

@@ -188,7 +188,7 @@ struct ChargeControlSection: View {
                     VStack(alignment: .leading, spacing: 6) {
                         metric(String(format: "%.1f°C", b.temperatureC), "battery temp")
                         metric(String(format: "%.1f W", abs(b.watts)), b.watts >= 0 ? "charging power" : "draw")
-                        metric("\(b.healthPercent)% · \(b.cycleCount) cycles", "health")
+                        metric("\(String(format: "%.1f", b.healthPercent))% · \(b.cycleCount) cycles", "health")
                     }
                 }
             }

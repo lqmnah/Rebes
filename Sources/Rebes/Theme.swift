@@ -76,7 +76,8 @@ extension NSImage {
 /// A Control Center-style frosted panel: rounded translucent material that
 /// refracts the backdrop, with a hairline top highlight and soft elevation.
 struct LQCard<Content: View>: View {
-    var padding: CGFloat = 16
+    /// 20pt default: air reads as premium (ui-pro-max §7).
+    var padding: CGFloat = 20
     var cornerRadius: CGFloat = 18
     @ViewBuilder var content: Content
 
@@ -101,23 +102,47 @@ struct AccentButtonStyle: ButtonStyle {
     var prominent = true
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        AccentButtonBody(accent: accent, prominent: prominent,
+                         label: configuration.label, isPressed: configuration.isPressed)
+    }
+}
+
+/// Buttons are a SYSTEM: hover (glow + slight lift) · press (≤50ms-feel ack,
+/// scale .96) · release (spring back). Reduce Motion drops the hover lift but
+/// keeps the instant press answer.
+private struct AccentButtonBody<Label: View>: View {
+    var accent: Color
+    var prominent: Bool
+    let label: Label
+    let isPressed: Bool
+
+    @StateObject private var hovering = LocalState(false)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var hoverScale: CGFloat { hovering.value && !reduceMotion ? 1.02 : 1 }
+
+    var body: some View {
+        label
             .font(.system(size: 13, weight: .semibold))
             .padding(.horizontal, 18)
             .padding(.vertical, 9)
             .background {
                 if prominent {
                     Capsule().fill(accent.gradient)
-                        .shadow(color: accent.opacity(0.35), radius: 6, y: 2)
+                        .shadow(color: accent.opacity(hovering.value ? 0.55 : 0.35),
+                                radius: hovering.value ? 9 : 6, y: 2)
                 } else {
                     Capsule().fill(.ultraThinMaterial)
-                        .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
+                        .overlay(Capsule().strokeBorder(
+                            hovering.value ? accent.opacity(0.5) : Theme.stroke, lineWidth: 1))
                 }
             }
             .foregroundStyle(prominent ? Color.black : Color.primary)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .scaleEffect(isPressed ? 0.96 : hoverScale)
+            .opacity(isPressed ? 0.9 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
+            .animation(.easeOut(duration: 0.15), value: hovering.value)
+            .onHover { hovering.value = $0 }
     }
 }
 
@@ -341,7 +366,9 @@ private struct BeresStampModifier: ViewModifier {
                             .perform(.levelChange, performanceTime: .default)
                         try? await Task.sleep(nanoseconds: 1_800_000_000)
                         guard !Task.isCancelled else { return }
-                        withAnimation(.easeOut(duration: 0.3)) { isPresented = false }
+                        // Exit curve: ease-in, ~30% faster than the entrance —
+                        // the user already decided; don't linger.
+                        withAnimation(.easeIn(duration: 0.2)) { isPresented = false }
                     }
             }
         }
@@ -668,6 +695,17 @@ extension Notification.Name {
     static let rebesNavigate = Notification.Name("rebesNavigate")
 }
 
+/// Chip press/hover feedback — plain style alone gives zero acknowledgment
+/// (ui-pro-max §4: silence is anxiety).
+private struct ChipButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
 /// Wrapping grid of selectable metric chips (menu bar settings).
 struct FlowChips: View {
     let all: [MenuBarMetric]
@@ -691,7 +729,7 @@ struct FlowChips: View {
                     }
                     .foregroundStyle(on ? Color.black : Color.primary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChipButtonStyle())
             }
         }
     }

@@ -42,6 +42,11 @@ struct DashboardView: View {
                                 labelValue: Double(monitor.snapshot.diskFreeBytes)
                             )
                             .frame(width: 170, height: 170)
+                            // Signature radial accent glow behind the hero ring.
+                            .background(
+                                RadialGradient(colors: [Theme.teal.opacity(0.22), .clear],
+                                               center: .center, startRadius: 20, endRadius: 120)
+                            )
 
                             Button("Smart Scan Now") { selection = .smartScan }
                                 .buttonStyle(AccentButtonStyle())
@@ -96,7 +101,7 @@ struct DashboardView: View {
                                         value: Double(battery.currentChargePercent)
                                     )
                                     .foregroundStyle(.primary)
-                                    Text("· Health \(battery.healthPercent)% · \(battery.cycleCount) cycles")
+                                    Text("· Health \(String(format: "%.1f", battery.healthPercent))% · \(battery.cycleCount) cycles")
                                         .foregroundStyle(.secondary)
                                     Spacer()
                                     Button("Details") { selection = .battery }
