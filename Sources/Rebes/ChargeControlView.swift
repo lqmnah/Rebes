@@ -150,7 +150,8 @@ struct ChargeControlSection: View {
                             Text("Band \(u)% / \(l)%")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                                 .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(Capsule().fill(.ultraThinMaterial))
+                                .background(Capsule().fill(Theme.surface))
+                                .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
                         }
                     }
                     if let st = state.status {

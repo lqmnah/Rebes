@@ -192,6 +192,7 @@ struct ContentView: View {
             // every click landed one row off. Opting out of the safe area
             // makes visuals and hit-testing share the same space again.
             .ignoresSafeArea(.container, edges: .top)
+            .background(Theme.sidebarBg)
             .coordinateSpace(name: "rebes-sidebar")
             .onPreferenceChange(SidebarRowFrameKey.self) { frames in
                 Task { @MainActor in hoverModel.frames = frames }

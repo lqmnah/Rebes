@@ -41,7 +41,7 @@ cat <<EOF > "$APP_DIR/Contents/Info.plist"
     <key>CFBundleShortVersionString</key>
     <string>2.0.0</string>
     <key>CFBundleVersion</key>
-    <string>113</string>
+    <string>114</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>NSHighResolutionCapable</key>
